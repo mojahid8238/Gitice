@@ -127,23 +127,32 @@ const gitCommands = {
         printTerminal('  cd <dir>           - Change directory');
         printTerminal('  pwd                - Print working directory');
         printTerminal('  clear              - Clear terminal output');
+        printTerminal('  touch <file>       - Create a new empty file');
         printTerminal('\nAvailable Git Commands:');
         printTerminal('  git init           - Initialize a new repository');
         printTerminal('  git status         - Show the working tree status');
-        printTerminal('  git add <file>     - Add file contents to the index');
-        printTerminal('  git commit -m <msg>- Record changes to the repository');
-        printTerminal('  git branch [name]  - List, create, or delete branches');
-        printTerminal('  git checkout <br>  - Switch branches or restore working tree files');
+        printTerminal('  git add <file>|.   - Add file contents to the index');
+        printTerminal('  git rm <file>      - Remove files from the working tree and from the index');
+        printTerminal('  git commit [-a] -m - Record changes to the repository (--amend to amend)');
+        printTerminal('  git branch         - List, create, or delete branches (-d, -D, -m)');
+        printTerminal('  git checkout       - Switch branches or restore working tree files (-b)');
+        printTerminal('  git switch         - Switch branches (-c to create)');
+        printTerminal('  git restore        - Restore working tree files');
         printTerminal('  git merge <br>     - Join two or more development histories together');
-        printTerminal('  git reset --hard <h>- Reset current HEAD to specified state');
-        printTerminal('  git log            - Show commit logs');
-        printTerminal('\nTry "git help" or "git <command> --help" for more information.');
+        printTerminal('  git rebase <br>    - Reapply commits on top of another base tip');
+        printTerminal('  git reset <mode>   - Reset current HEAD to specified state (--soft, --mixed, --hard)');
+        printTerminal('  git revert <commit>- Revert some existing commits');
+        printTerminal('  git cherry-pick <c>- Apply the changes introduced by some existing commits');
+        printTerminal('  git stash [pop]    - Stash the changes in a dirty working directory away');
+        printTerminal('  git log            - Show commit logs (--oneline, --graph)');
+        printTerminal('\nTry "git <command> --help" for more information.');
     },
     'git init': () => {
         if (state.initialized) { printTerminal('Reinitialized existing Git repository', 'info'); return; }
         state.initialized = true;
         state.branches = { 'main': null };
         state.HEAD = 'refs/heads/main';
+        state.stashes = [];
         printTerminal('Initialized empty Git repository', 'success');
         renderGraph();
     },
@@ -163,16 +172,60 @@ const gitCommands = {
     },
     'git add': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
-        state.stagedFiles = [...state.modifiedFiles];
-        state.modifiedFiles = [];
+        if (!args.length) return printTerminal('Nothing specified, nothing added.', 'warn');
+        if (args.includes('.') || args.includes('-A') || args.includes('--all')) {
+            state.stagedFiles = [...new Set([...state.stagedFiles, ...state.modifiedFiles])];
+            state.modifiedFiles = [];
+        } else {
+            args.forEach(file => {
+                if (file.startsWith('-')) return;
+                const idx = state.modifiedFiles.indexOf(file);
+                if (idx !== -1) {
+                    state.modifiedFiles.splice(idx, 1);
+                    if (!state.stagedFiles.includes(file)) state.stagedFiles.push(file);
+                } else if (!state.stagedFiles.includes(file)) {
+                    state.stagedFiles.push(file); // allow adding non-existent files for simulation
+                }
+            });
+        }
+    },
+    'git rm': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        args.forEach(file => {
+            if (file.startsWith('-')) return;
+            const idxS = state.stagedFiles.indexOf(file);
+            const idxM = state.modifiedFiles.indexOf(file);
+            if (idxS !== -1) state.stagedFiles.splice(idxS, 1);
+            if (idxM !== -1) state.modifiedFiles.splice(idxM, 1);
+            printTerminal(`rm '${file}'`);
+        });
     },
     'git commit': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        if (args.includes('-a') || args.includes('--all')) {
+            state.stagedFiles = [...new Set([...state.stagedFiles, ...state.modifiedFiles])];
+            state.modifiedFiles = [];
+        }
+        const amend = args.includes('--amend');
+        const allowEmpty = args.includes('--allow-empty');
+        if (!amend && !allowEmpty && !state.stagedFiles.length) return printTerminal('nothing to commit, working tree clean');
+        
         const msgIdx = args.indexOf('-m');
-        const message = (msgIdx !== -1 && args[msgIdx + 1]) ? args[msgIdx + 1] : 'Update';
         const currentId = resolveHead();
-        const newId = generateCommitId();
         const branch = getHeadBranch();
+        let message = (msgIdx !== -1 && args[msgIdx + 1]) ? args[msgIdx + 1] : 'Update';
+
+        if (amend && currentId) {
+            const oldCommit = state.commits[currentId];
+            if (msgIdx === -1) message = oldCommit.message;
+            oldCommit.message = message;
+            state.stagedFiles = [];
+            printTerminal(`[${branch || 'detached HEAD'} ${currentId}] ${message} (amended)`, 'success');
+            renderGraph();
+            return;
+        }
+
+        const newId = generateCommitId();
         state.commits[newId] = {
             id: newId, message, timestamp: Date.now(),
             parents: currentId ? [currentId] : [],
@@ -190,22 +243,34 @@ const gitCommands = {
             Object.keys(state.branches).forEach(b => printTerminal(`${getHeadBranch() === b ? '* ' : '  '}${b}`, getHeadBranch() === b ? 'success' : ''));
             return;
         }
+        const target = args[1] || args[0];
         if (args[0] === '-d' || args[0] === '-D') {
-            const target = args[1];
-            if (!target) return printTerminal('fatal: branch name required', 'error');
+            if (!target || target.startsWith('-')) return printTerminal('fatal: branch name required', 'error');
             if (state.branches[target] === undefined) return printTerminal(`error: branch '${target}' not found.`, 'error');
             if (getHeadBranch() === target) return printTerminal(`error: Cannot delete branch '${target}' checked out`, 'error');
             const hash = state.branches[target];
             delete state.branches[target];
             
-            // Forcefully wipe out all commits associated with this branch to clear the visual track
-            Object.keys(state.commits).forEach(id => {
-                if (state.commits[id].branch === target) {
-                    delete state.commits[id];
-                }
-            });
-            
+            // Forcefully wipe out all commits associated with this branch to clear the visual track if not merged
+            if (args[0] === '-D') {
+                 Object.keys(state.commits).forEach(id => {
+                     if (state.commits[id].branch === target) delete state.commits[id];
+                 });
+            }
             printTerminal(`Deleted branch ${target} (was ${hash ? hash.substring(0, 7) : 'unknown'}).`);
+            renderGraph();
+            return;
+        }
+        if (args[0] === '-m' || args[0] === '-M') {
+            const oldName = args.length === 3 ? args[1] : getHeadBranch();
+            const newName = args.length === 3 ? args[2] : args[1];
+            if (!oldName) return printTerminal('fatal: no branch specified to rename', 'error');
+            if (!state.branches[oldName]) return printTerminal(`error: refname refs/heads/${oldName} not found`, 'error');
+            if (state.branches[newName]) return printTerminal(`fatal: A branch named '${newName}' already exists.`, 'error');
+            state.branches[newName] = state.branches[oldName];
+            delete state.branches[oldName];
+            if (state.HEAD === `refs/heads/${oldName}`) state.HEAD = `refs/heads/${newName}`;
+            Object.values(state.commits).forEach(c => { if (c.branch === oldName) c.branch = newName; });
             renderGraph();
             return;
         }
@@ -215,15 +280,59 @@ const gitCommands = {
     },
     'git checkout': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        if (!args.length) return printTerminal('fatal: missing branch or path', 'error');
         let target = args[0];
-        if (target === '-b') { gitCommands['git branch']([args[1]]); target = args[1]; }
+        if (target === '-b' || target === '-B') { 
+            const bName = args[1];
+            if (target === '-B' || !state.branches[bName]) {
+                state.branches[bName] = resolveHead();
+            } else {
+                return printTerminal(`fatal: A branch named '${bName}' already exists.`, 'error');
+            }
+            target = bName; 
+        } else if (target === '--') {
+            args.slice(1).forEach(f => {
+                if (state.modifiedFiles.includes(f)) {
+                    state.modifiedFiles.splice(state.modifiedFiles.indexOf(f), 1);
+                    printTerminal(`Restored ${f}`);
+                }
+            });
+            return;
+        }
         if (state.branches[target] !== undefined) { state.HEAD = `refs/heads/${target}`; printTerminal(`Switched to branch '${target}'`); }
         else {
             const hash = Object.keys(state.commits).find(k => k.startsWith(target));
             if (hash) { state.HEAD = hash; printTerminal(`Note: switching to '${hash}'. Detached HEAD.`, 'warn'); }
-            else printTerminal(`error: pathspec '${target}' did not match`, 'error');
+            else if (state.modifiedFiles.includes(target) || state.stagedFiles.includes(target)) {
+                 if (state.modifiedFiles.includes(target)) state.modifiedFiles.splice(state.modifiedFiles.indexOf(target), 1);
+                 return; // File checkout
+            }
+            else printTerminal(`error: pathspec '${target}' did not match any file(s) known to git`, 'error');
         }
         renderGraph();
+    },
+    'git switch': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        if (!args.length) return printTerminal('fatal: missing branch', 'error');
+        if (args[0] === '-c' || args[0] === '-C') {
+             gitCommands['git checkout'](['-b', args[1]]);
+        } else {
+             gitCommands['git checkout']([args[0]]);
+        }
+    },
+    'git restore': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        const staged = args.includes('--staged');
+        args.forEach(f => {
+            if (f.startsWith('-')) return;
+            if (staged) {
+                const idx = state.stagedFiles.indexOf(f);
+                if (idx !== -1) { state.stagedFiles.splice(idx, 1); state.modifiedFiles.push(f); }
+            } else {
+                const idx = state.modifiedFiles.indexOf(f);
+                if (idx !== -1) state.modifiedFiles.splice(idx, 1);
+            }
+        });
     },
     'git merge': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
@@ -231,31 +340,166 @@ const gitCommands = {
         if (!targetHash) return printTerminal(`merge: ${args[0]} - not something we can merge`, 'error');
         const current = resolveHead();
         if (current === targetHash) return printTerminal('Already up to date.');
-        const newId = generateCommitId();
+        
+        let isFastForward = false;
+        let p = targetHash;
+        const visited = new Set();
+        const q = [p];
+        while(q.length) {
+            let n = q.shift();
+            if (n === current) { isFastForward = true; break; }
+            if (visited.has(n)) continue; visited.add(n);
+            if (state.commits[n]) q.push(...state.commits[n].parents);
+        }
+
         const branch = getHeadBranch();
+        if (isFastForward && !args.includes('--no-ff')) {
+             if (branch) state.branches[branch] = targetHash; else state.HEAD = targetHash;
+             printTerminal('Fast-forward', 'success');
+        } else {
+             const newId = generateCommitId();
+             state.commits[newId] = {
+                 id: newId, message: `Merge branch '${args[0]}'`, timestamp: Date.now(),
+                 parents: [current, targetHash], branch: branch || 'detached', color: getBranchColor(branch)
+             };
+             if (branch) state.branches[branch] = newId; else state.HEAD = newId;
+             printTerminal('Merge made by recursive strategy.', 'success');
+        }
+        renderGraph();
+    },
+    'git rebase': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        const targetHash = state.branches[args[0]] || Object.keys(state.commits).find(k => k.startsWith(args[0]));
+        if (!targetHash) return printTerminal(`fatal: invalid upstream '${args[0]}'`, 'error');
+        const current = resolveHead();
+        if (current === targetHash) return printTerminal('Current branch is up to date.');
+        const branch = getHeadBranch();
+        
+        const getAncestors = (start) => {
+            const res = new Set(); const q = [start];
+            while(q.length) {
+                let n = q.shift(); if (!res.has(n) && state.commits[n]) { res.add(n); q.push(...state.commits[n].parents); }
+            }
+            return res;
+        };
+        const targetAncestors = getAncestors(targetHash);
+        const toRebase = [];
+        let curr = current;
+        while (curr && !targetAncestors.has(curr)) {
+            toRebase.unshift(state.commits[curr]);
+            curr = state.commits[curr].parents[0];
+        }
+        
+        if (toRebase.length === 0) {
+            if (branch) state.branches[branch] = targetHash; else state.HEAD = targetHash;
+            printTerminal(`Fast-forwarded ${branch} to ${args[0]}.`, 'success');
+        } else {
+            let newBase = targetHash;
+            toRebase.forEach(c => {
+                const newId = generateCommitId();
+                state.commits[newId] = {
+                    id: newId, message: c.message, timestamp: Date.now(),
+                    parents: [newBase], branch: branch || 'detached', color: getBranchColor(branch)
+                };
+                newBase = newId;
+            });
+            if (branch) state.branches[branch] = newBase; else state.HEAD = newBase;
+            printTerminal(`Successfully rebased and updated ${branch || 'detached HEAD'}.`, 'success');
+        }
+        renderGraph();
+    },
+    'git cherry-pick': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        const targetStr = args[0];
+        const targetHash = Object.keys(state.commits).find(k => k.startsWith(targetStr));
+        const targetCommit = state.commits[targetHash];
+        if (!targetCommit) return printTerminal(`fatal: bad revision '${targetStr}'`, 'error');
+        const branch = getHeadBranch();
+        const currentId = resolveHead();
+        const newId = generateCommitId();
         state.commits[newId] = {
-            id: newId, message: `Merge branch '${args[0]}'`, timestamp: Date.now(),
-            parents: [current, targetHash], branch: branch || 'detached', color: getBranchColor(branch)
+            id: newId, message: targetCommit.message, timestamp: Date.now(),
+            parents: currentId ? [currentId] : [], branch: branch || 'detached', color: getBranchColor(branch)
         };
         if (branch) state.branches[branch] = newId; else state.HEAD = newId;
-        printTerminal('Merge made by recursive strategy.', 'success');
+        printTerminal(`[${branch || 'detached HEAD'} ${newId}] ${targetCommit.message}`, 'success');
+        renderGraph();
+    },
+    'git revert': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        const targetStr = args[0];
+        const targetHash = Object.keys(state.commits).find(k => k.startsWith(targetStr));
+        const targetCommit = state.commits[targetHash];
+        if (!targetCommit) return printTerminal(`fatal: bad revision '${targetStr}'`, 'error');
+        const branch = getHeadBranch();
+        const currentId = resolveHead();
+        const newId = generateCommitId();
+        state.commits[newId] = {
+            id: newId, message: `Revert "${targetCommit.message}"`, timestamp: Date.now(),
+            parents: currentId ? [currentId] : [], branch: branch || 'detached', color: getBranchColor(branch)
+        };
+        if (branch) state.branches[branch] = newId; else state.HEAD = newId;
+        printTerminal(`[${branch || 'detached HEAD'} ${newId}] Revert "${targetCommit.message}"`, 'success');
         renderGraph();
     },
     'git reset': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
         const isHard = args.includes('--hard');
-        const targetStr = isHard ? (args[args.indexOf('--hard') + 1] || args[0]) : args[0];
-        if (targetStr === '--hard') return printTerminal('fatal: must specify a commit to reset to', 'error');
-        const target = state.branches[targetStr] || Object.keys(state.commits).find(k => k.startsWith(targetStr));
+        const isSoft = args.includes('--soft');
+        const isMixed = args.includes('--mixed') || (!isHard && !isSoft);
+        const targetStr = args.find(a => !a.startsWith('-')) || 'HEAD';
+        
+        let target = state.branches[targetStr] || Object.keys(state.commits).find(k => k.startsWith(targetStr));
+        if (targetStr === 'HEAD') target = resolveHead();
+        else if (targetStr.startsWith('HEAD~')) {
+             let steps = parseInt(targetStr.split('~')[1]) || 1;
+             let curr = resolveHead();
+             while (steps > 0 && curr && state.commits[curr].parents.length) {
+                 curr = state.commits[curr].parents[0];
+                 steps--;
+             }
+             target = curr;
+        }
+
         if (!target) return printTerminal(`fatal: Cannot find commit ${targetStr}`, 'error');
+        
         const branch = getHeadBranch();
         if (branch) state.branches[branch] = target; else state.HEAD = target;
-        if (isHard) { state.stagedFiles = []; state.modifiedFiles = []; }
-        printTerminal(`HEAD is now at ${target.substring(0, 7)} ${state.commits[target].message}`, 'success');
+        
+        if (isHard) {
+            state.stagedFiles = []; state.modifiedFiles = [];
+            printTerminal(`HEAD is now at ${target.substring(0, 7)} ${state.commits[target].message}`, 'success');
+        } else if (isMixed) {
+            state.modifiedFiles = [...new Set([...state.modifiedFiles, ...state.stagedFiles])];
+            state.stagedFiles = [];
+            printTerminal('Unstaged changes after reset:', 'warn');
+        }
         renderGraph();
     },
-    'git log': () => {
+    'git stash': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        if (!state.stashes) state.stashes = [];
+        if (args[0] === 'pop') {
+            if (!state.stashes.length) return printTerminal('No stash entries found.', 'error');
+            const stashed = state.stashes.pop();
+            state.modifiedFiles = [...new Set([...state.modifiedFiles, ...stashed.modified])];
+            state.stagedFiles = [...new Set([...state.stagedFiles, ...stashed.staged])];
+            printTerminal(`Dropped refs/stash@{0} (${stashed.id})`);
+            return;
+        }
+        if (args[0] === 'clear') { state.stashes = []; return printTerminal('Stash cleared.'); }
+        if (!state.modifiedFiles.length && !state.stagedFiles.length) return printTerminal('No local changes to save');
+        const branch = getHeadBranch() || 'detached HEAD';
+        const headCommit = state.commits[resolveHead()];
+        const stashMsg = `WIP on ${branch}: ${headCommit ? headCommit.id.substring(0, 7) : ''} ${headCommit ? headCommit.message : ''}`;
+        state.stashes.push({ modified: [...state.modifiedFiles], staged: [...state.stagedFiles], id: generateCommitId() });
+        state.modifiedFiles = []; state.stagedFiles = [];
+        printTerminal(`Saved working directory and index state ${stashMsg}`, 'success');
+    },
+    'git log': (args) => {
+        if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        const oneline = args.includes('--oneline');
+        const graph = args.includes('--graph');
         let curr = resolveHead();
         const visited = new Set();
         const queue = curr ? [curr] : [];
@@ -264,13 +508,26 @@ const gitCommands = {
             if (visited.has(id)) continue;
             visited.add(id);
             const c = state.commits[id];
-            printTerminal(`commit ${c.id}`, 'warn');
-            printTerminal(`Author: Mojahid <mojahid@gitice.com>\nDate: ${new Date(c.timestamp).toUTCString()}\n\n    ${c.message}\n`);
+            
+            let refNames = [];
+            if (state.HEAD === id) refNames.push('HEAD');
+            else if (state.HEAD === `refs/heads/${c.branch}` && state.branches[c.branch] === id) refNames.push(`HEAD -> ${c.branch}`);
+            Object.keys(state.branches).forEach(b => {
+                if (state.branches[b] === id && state.HEAD !== `refs/heads/${b}`) refNames.push(b);
+            });
+            const refStr = refNames.length ? ` (${refNames.join(', ')})` : '';
+
+            if (oneline) {
+                printTerminal(`${graph ? '* ' : ''}${c.id.substring(0, 7)}${refStr} ${c.message}`, 'warn');
+            } else {
+                printTerminal(`commit ${c.id}${refStr}`, 'warn');
+                printTerminal(`Author: Mojahid <mojahid@gitice.com>\nDate: ${new Date(c.timestamp).toUTCString()}\n\n    ${c.message}\n`);
+            }
             c.parents.forEach(p => queue.push(p));
         }
     },
     ls: (args) => {
-        const target = args[0] ? getFullPath(args[0]) : currentPath;
+        const target = args[0] && !args[0].startsWith('-') ? getFullPath(args[0]) : currentPath;
         const entry = fileSystem[target];
         if (entry && entry.type === 'dir') printTerminal(entry.children.join('  '));
         else if (entry) printTerminal(args[0]);
@@ -283,6 +540,14 @@ const gitCommands = {
         const target = getFullPath(path);
         if (fileSystem[target] && fileSystem[target].type === 'dir') { currentPath = target; updatePrompt(); }
         else printTerminal(`bash: cd: ${path}: No such file or directory`, 'error');
+    },
+    touch: (args) => {
+        if (!args.length) return printTerminal('touch: missing file operand', 'error');
+        args.forEach(f => {
+            if (!f.startsWith('-') && !state.modifiedFiles.includes(f) && !state.stagedFiles.includes(f)) {
+                 state.modifiedFiles.push(f);
+            }
+        });
     },
     clear: () => { terminalOutput.innerHTML = ''; }
 };
@@ -385,7 +650,7 @@ function renderGraph() {
 function resetState() {
     state = {
         initialized: false, commits: {}, branches: {}, HEAD: null, commitCounter: 0,
-        stagedFiles: [], modifiedFiles: ['App.js', 'styles.css']
+        stagedFiles: [], modifiedFiles: ['App.js', 'styles.css'], stashes: []
     };
     if (terminalOutput) terminalOutput.innerHTML = '';
     renderGraph();
@@ -393,70 +658,70 @@ function resetState() {
 
 function mockSimple() {
     resetState(); gitCommands['git init']();
-    gitCommands['git commit'](['-m', 'Initial commit']);
-    gitCommands['git commit'](['-m', 'Setup project structure']);
-    gitCommands['git commit'](['-m', 'Add landing page']);
-    gitCommands['git commit'](['-m', 'Fix CSS layout issues']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Initial commit']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Setup project structure']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Add landing page']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Fix CSS layout issues']);
     printTerminal('Loaded Simple (Linear) Scenario.', 'success');
 }
 function mockIntermediate() {
     resetState(); gitCommands['git init']();
-    gitCommands['git commit'](['-m', 'Initial commit']);
-    gitCommands['git commit'](['-m', 'Setup express server']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Initial commit']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Setup express server']);
     
     gitCommands['git checkout'](['-b', 'feature/auth']);
-    gitCommands['git commit'](['-m', 'Add JWT logic']);
-    gitCommands['git commit'](['-m', 'Add login UI components']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Add JWT logic']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Add login UI components']);
     
     gitCommands['git checkout'](['main']);
-    gitCommands['git commit'](['-m', 'Update README.md']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Update README.md']);
     
     gitCommands['git merge'](['feature/auth']);
     printTerminal('Loaded Intermediate (Branching) Scenario.', 'success');
 }
 function mockComplex() {
     resetState(); gitCommands['git init']();
-    gitCommands['git commit'](['-m', 'Initial commit']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Initial commit']);
     
     gitCommands['git checkout'](['-b', 'develop']);
-    gitCommands['git commit'](['-m', 'Setup development environment']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Setup development environment']);
     
     gitCommands['git checkout'](['-b', 'feature/dashboard']);
-    gitCommands['git commit'](['-m', 'Add dashboard skeleton']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Add dashboard skeleton']);
     
     gitCommands['git checkout'](['develop']);
     gitCommands['git checkout'](['-b', 'feature/api']);
-    gitCommands['git commit'](['-m', 'Create user endpoints']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Create user endpoints']);
     
     gitCommands['git checkout'](['develop']);
     gitCommands['git merge'](['feature/dashboard']);
     
     gitCommands['git checkout'](['main']);
     gitCommands['git checkout'](['-b', 'hotfix/security']);
-    gitCommands['git commit'](['-m', 'Fix severe security vulnerability']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Fix severe security vulnerability']);
     gitCommands['git checkout'](['main']);
     gitCommands['git merge'](['hotfix/security']);
     printTerminal('Loaded Complex (Collaborative) Scenario.', 'success');
 }
 function mockAdvanced() {
     resetState(); gitCommands['git init']();
-    gitCommands['git commit'](['-m', 'Initial commit']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Initial commit']);
     
     gitCommands['git checkout'](['-b', 'develop']);
-    gitCommands['git commit'](['-m', 'Add core utilities']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Add core utilities']);
     
     gitCommands['git checkout'](['-b', 'feature/payment']);
-    gitCommands['git commit'](['-m', 'Integrate Stripe API']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Integrate Stripe API']);
     
     gitCommands['git checkout'](['develop']);
     gitCommands['git checkout'](['-b', 'feature/notifications']);
-    gitCommands['git commit'](['-m', 'Add email service']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Add email service']);
     
     gitCommands['git checkout'](['develop']);
     gitCommands['git merge'](['feature/payment']);
     
     gitCommands['git checkout'](['-b', 'release/v1.0']);
-    gitCommands['git commit'](['-m', 'Bump version to 1.0']);
+    gitCommands['git commit'](['--allow-empty', '-m', 'Bump version to 1.0']);
     
     gitCommands['git checkout'](['develop']);
     gitCommands['git merge'](['feature/notifications']);
@@ -536,9 +801,18 @@ window.onload = () => {
         return tokens.map(t => t.replace(/^["']|["']$/g, ''));
     };
 
+    let commandHistory = [];
+    let historyIndex = -1;
+
     terminalInput.onkeydown = (e) => {
         if (e.key === 'Enter') {
-            const val = terminalInput.value.trim(); terminalInput.value = ''; if (!val) return;
+            const val = terminalInput.value.trim(); 
+            if (val) {
+                commandHistory.push(val);
+                historyIndex = commandHistory.length;
+            }
+            terminalInput.value = ''; 
+            if (!val) return;
             const displayPath = currentPath === '/' ? '~' : `~${currentPath}`;
             printTerminal(`mojahid@gitice:${displayPath}$ ${val}`);
             const parts = parseCommand(val), base = parts[0];
@@ -549,6 +823,21 @@ window.onload = () => {
                 else printTerminal(`git: '${sub}' is not a git command.`, 'error');
             } else if (gitCommands[base]) gitCommands[base](parts.slice(1));
             else printTerminal(`bash: ${base}: command not found`, 'error');
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (historyIndex > 0) {
+                historyIndex--;
+                terminalInput.value = commandHistory[historyIndex];
+            }
+        } else if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (historyIndex < commandHistory.length - 1) {
+                historyIndex++;
+                terminalInput.value = commandHistory[historyIndex];
+            } else {
+                historyIndex = commandHistory.length;
+                terminalInput.value = '';
+            }
         }
     };
 

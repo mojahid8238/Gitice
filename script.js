@@ -13,6 +13,80 @@ const toggleLayoutBtn = document.getElementById('toggle-layout');
 const projectSelect = document.getElementById('project-select');
 const terminalPrompt = document.getElementById('terminal-prompt');
 const toastElement = document.getElementById('toast');
+const customControls = document.getElementById('custom-controls');
+const btnCommit = document.getElementById('btn-commit');
+const btnBranch = document.getElementById('btn-branch');
+const btnCheckout = document.getElementById('btn-checkout');
+const btnMerge = document.getElementById('btn-merge');
+const modalElement = document.getElementById('custom-modal');
+const modalTitle = document.getElementById('modal-title');
+const modalMessage = document.getElementById('modal-message');
+const modalInput = document.getElementById('modal-input');
+const modalCancel = document.getElementById('modal-cancel');
+const modalConfirm = document.getElementById('modal-confirm');
+const contextMenu = document.getElementById('context-menu');
+const menuCommit = document.getElementById('menu-commit');
+const menuBranch = document.getElementById('menu-branch');
+const menuCheckout = document.getElementById('menu-checkout');
+const menuCtxMerge = document.getElementById('menu-merge');
+
+let contextMenuTarget = null;
+let activeModalCallback = null;
+
+function showModal(title, message, isConfirm, defaultValue, callback) {
+    modalTitle.textContent = title;
+    modalMessage.textContent = message;
+    
+    if (isConfirm) {
+        modalInput.classList.add('hidden');
+        modalInput.value = '';
+    } else {
+        modalInput.classList.remove('hidden');
+        modalInput.value = defaultValue || '';
+    }
+    
+    modalElement.classList.remove('hidden');
+    if (!isConfirm) setTimeout(() => modalInput.focus(), 50);
+    
+    activeModalCallback = callback;
+}
+
+function closeModal() {
+    modalElement.classList.add('hidden');
+    activeModalCallback = null;
+}
+
+modalCancel.onclick = () => {
+    if (activeModalCallback) {
+        const cb = activeModalCallback;
+        closeModal();
+        cb(null);
+    } else {
+        closeModal();
+    }
+};
+
+modalConfirm.onclick = () => {
+    if (activeModalCallback) {
+        const val = modalInput.classList.contains('hidden') ? true : modalInput.value.trim();
+        const cb = activeModalCallback;
+        closeModal();
+        cb(val);
+    } else {
+        closeModal();
+    }
+};
+
+modalInput.onkeydown = (e) => {
+    if (e.key === 'Enter') modalConfirm.click();
+    if (e.key === 'Escape') modalCancel.click();
+};
+
+window.addEventListener('keydown', (e) => {
+    if (!modalElement.classList.contains('hidden') && e.key === 'Escape') {
+        modalCancel.click();
+    }
+});
 
 // --- Application State ---
 let isDragging = false;
@@ -623,6 +697,14 @@ function renderGraph() {
             if (navigator.clipboard) { navigator.clipboard.writeText(c.id); showToast(`Copied: ${c.id}`); }
         };
         
+        node.oncontextmenu = (e) => {
+            e.preventDefault();
+            contextMenuTarget = c.id;
+            contextMenu.style.left = `${e.clientX}px`;
+            contextMenu.style.top = `${e.clientY}px`;
+            contextMenu.classList.remove('hidden');
+        };
+        
         if (isHead) {
             const tag = document.createElement('div');
             tag.className = 'head-tag'; tag.textContent = 'HEAD';
@@ -734,6 +816,12 @@ function mockAdvanced() {
     printTerminal('Loaded Advanced (Enterprise) Scenario.', 'success');
 }
 
+function mockCustom() {
+    resetState(); 
+    gitCommands['git init']();
+    printTerminal('Loaded Custom (Sandbox) Scenario. Start typing commands to build your own graph!', 'success');
+}
+
 // --- Initialization & Events ---
 window.onload = () => {
     mainContent.classList.add(currentLayout);
@@ -752,10 +840,82 @@ window.onload = () => {
 
     projectSelect.onchange = (e) => {
         const v = e.target.value;
+        
+        if (v === 'custom') {
+            customControls.classList.remove('hidden');
+        } else {
+            customControls.classList.add('hidden');
+        }
+
         if (v === 'simple') mockSimple();
         else if (v === 'intermediate') mockIntermediate();
         else if (v === 'complex') mockComplex();
         else if (v === 'advanced') mockAdvanced();
+        else if (v === 'custom') mockCustom();
+    };
+
+    btnCommit.onclick = () => {
+        showModal('Commit', 'Enter commit message:', false, 'Custom commit', (msg) => {
+            if (msg) gitCommands['git commit'](['--allow-empty', '-m', msg]);
+        });
+    };
+
+    btnBranch.onclick = () => {
+        showModal('Create Branch', 'Enter new branch name:', false, '', (branchName) => {
+            if (branchName) {
+                gitCommands['git branch']([branchName]);
+                showModal('Switch Branch', `Switch to branch '${branchName}'?`, true, '', (confirm) => {
+                    if (confirm) gitCommands['git checkout']([branchName]);
+                });
+            }
+        });
+    };
+
+    btnCheckout.onclick = () => {
+        showModal('Checkout', 'Enter branch name to checkout:', false, '', (branchName) => {
+            if (branchName) gitCommands['git checkout']([branchName]);
+        });
+    };
+
+    btnMerge.onclick = () => {
+        showModal('Merge', 'Enter branch name to merge into current:', false, '', (branchName) => {
+            if (branchName) gitCommands['git merge']([branchName]);
+        });
+    };
+
+    document.addEventListener('click', () => {
+        if (contextMenu) contextMenu.classList.add('hidden');
+    });
+
+    menuCommit.onclick = () => {
+        if (!contextMenuTarget) return;
+        gitCommands['git checkout']([contextMenuTarget]);
+        showModal('Commit', 'Enter commit message:', false, 'Custom commit', (msg) => {
+            if (msg) gitCommands['git commit'](['--allow-empty', '-m', msg]);
+        });
+    };
+
+    menuBranch.onclick = () => {
+        if (!contextMenuTarget) return;
+        showModal('Create Branch', 'Enter new branch name:', false, '', (branchName) => {
+            if (branchName) {
+                gitCommands['git checkout']([contextMenuTarget]);
+                gitCommands['git branch']([branchName]);
+                showModal('Switch Branch', `Switch to branch '${branchName}'?`, true, '', (confirm) => {
+                    if (confirm) gitCommands['git checkout']([branchName]);
+                });
+            }
+        });
+    };
+
+    menuCheckout.onclick = () => {
+        if (!contextMenuTarget) return;
+        gitCommands['git checkout']([contextMenuTarget]);
+    };
+
+    menuCtxMerge.onclick = () => {
+        if (!contextMenuTarget) return;
+        gitCommands['git merge']([contextMenuTarget]);
     };
 
     resizer.onmousedown = (e) => {

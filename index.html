@@ -25,12 +25,19 @@
                     <option value="intermediate">Intermediate (Branching)</option>
                     <option value="complex">Complex (Collaborative)</option>
                     <option value="advanced">Advanced (Enterprise)</option>
+                    <option value="custom">Custom (Sandbox)</option>
                 </select>
             </div>
         </header>
 
         <main class="main-content" id="main-content">
             <div class="visualization-panel" id="visual-panel">
+                <div id="custom-controls" class="custom-controls hidden">
+                    <button id="btn-commit" class="control-btn" title="Commit">➕ Commit</button>
+                    <button id="btn-branch" class="control-btn" title="Create Branch">🌱 Branch</button>
+                    <button id="btn-checkout" class="control-btn" title="Checkout Branch">🔄 Checkout</button>
+                    <button id="btn-merge" class="control-btn" title="Merge Branch">🔀 Merge</button>
+                </div>
                 <div class="canvas-container" id="canvas-container">
                     <svg id="git-graph-svg" class="git-graph-svg"></svg>
                     <div id="nodes-container" class="nodes-container"></div>
@@ -63,6 +70,26 @@
         </main>
     </div>
     <div id="toast" class="toast">Hash copied!</div>
+
+    <div id="context-menu" class="context-menu hidden">
+        <div class="menu-item" id="menu-commit">➕ Commit Here</div>
+        <div class="menu-item" id="menu-branch">🌱 Branch from Here</div>
+        <div class="menu-item" id="menu-checkout">🔄 Checkout Commit</div>
+        <div class="menu-item" id="menu-merge">🔀 Merge into Current</div>
+    </div>
+
+    <div id="custom-modal" class="custom-modal hidden">
+        <div class="modal-content">
+            <h3 id="modal-title">Title</h3>
+            <p id="modal-message">Message</p>
+            <input type="text" id="modal-input" class="modal-input" autocomplete="off" spellcheck="false">
+            <div class="modal-actions">
+                <button id="modal-cancel" class="control-btn secondary">Cancel</button>
+                <button id="modal-confirm" class="control-btn primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 

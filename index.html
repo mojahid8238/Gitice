@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title> Git Visual Simulator</title>
-    <link rel="icon" type="image/png" href="logo.png">
+    <link rel="icon" type="image/png" href="assets/logo.png">
     <link rel="stylesheet" href="styles.css">
     <link
         href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600&display=swap"
@@ -32,7 +32,9 @@
 
         <main class="main-content" id="main-content">
             <div class="visualization-panel" id="visual-panel">
-                <div id="custom-controls" class="custom-controls hidden">
+                <div id="custom-controls" class="custom-controls">
+                    <button id="btn-modify" class="control-btn" title="Modify a file">✏️ Modify</button>
+                    <button id="btn-stage" class="control-btn" title="Stage all changes">📦 Stage</button>
                     <button id="btn-commit" class="control-btn" title="Commit">➕ Commit</button>
                     <button id="btn-branch" class="control-btn" title="Create Branch">🌱 Branch</button>
                     <button id="btn-checkout" class="control-btn" title="Checkout Branch">🔄 Checkout</button>
@@ -72,6 +74,9 @@
     <div id="toast" class="toast">Hash copied!</div>
 
     <div id="context-menu" class="context-menu hidden">
+        <div class="menu-item" id="menu-modify">✏️ Modify File</div>
+        <div class="menu-item" id="menu-stage">📦 Stage Changes</div>
+        <div class="menu-separator"></div>
         <div class="menu-item" id="menu-commit">➕ Commit Here</div>
         <div class="menu-item" id="menu-branch">🌱 Branch from Here</div>
         <div class="menu-item" id="menu-checkout">🔄 Checkout Commit</div>

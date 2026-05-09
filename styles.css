@@ -148,8 +148,10 @@ body {
     position: absolute;
     top: 0;
     left: 0;
-    width: 3000px;
-    height: 3000px;
+    min-width: 100%;
+    min-height: 100%;
+    width: 5000px;
+    height: 5000px;
     padding: 4rem;
     transform-origin: 0 0;
 }
@@ -395,6 +397,41 @@ body {
     outline: none;
 }
 
+#terminal-input.vim-active {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+}
+
+.vim-line {
+    font-family: 'Fira Code', monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    white-space: pre;
+    min-height: 1.2em;
+}
+
+.vim-cursor-char {
+    background-color: var(--text-primary);
+    color: var(--bg-terminal);
+}
+
+.vim-empty-line {
+    color: var(--text-secondary);
+    user-select: none;
+}
+
+.vim-status {
+    color: var(--term-prompt);
+    font-family: 'Fira Code', monospace;
+    font-size: 0.85rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border-color);
+    margin-top: 0.5rem;
+}
+
 .main-content.resizing { user-select: none; }
 .main-content.resizing .visualization-panel,
 .main-content.resizing .terminal-panel { pointer-events: none; }
@@ -562,4 +599,10 @@ body {
 .menu-item:hover {
     background: var(--accent);
     color: white;
+}
+
+.menu-separator {
+    height: 1px;
+    background: var(--border-color);
+    margin: 0.25rem 0;
 }

@@ -18,6 +18,8 @@ const btnCommit = document.getElementById('btn-commit');
 const btnBranch = document.getElementById('btn-branch');
 const btnCheckout = document.getElementById('btn-checkout');
 const btnMerge = document.getElementById('btn-merge');
+const btnModify = document.getElementById('btn-modify');
+const btnStage = document.getElementById('btn-stage');
 const modalElement = document.getElementById('custom-modal');
 const modalTitle = document.getElementById('modal-title');
 const modalMessage = document.getElementById('modal-message');
@@ -25,6 +27,8 @@ const modalInput = document.getElementById('modal-input');
 const modalCancel = document.getElementById('modal-cancel');
 const modalConfirm = document.getElementById('modal-confirm');
 const contextMenu = document.getElementById('context-menu');
+const menuModify = document.getElementById('menu-modify');
+const menuStage = document.getElementById('menu-stage');
 const menuCommit = document.getElementById('menu-commit');
 const menuBranch = document.getElementById('menu-branch');
 const menuCheckout = document.getElementById('menu-checkout');
@@ -33,11 +37,11 @@ const menuCtxMerge = document.getElementById('menu-merge');
 let contextMenuTarget = null;
 let activeModalCallback = null;
 
-function showModal(title, message, isConfirm, defaultValue, callback) {
+function showModal(title, message, showInput, defaultValue, callback) {
     modalTitle.textContent = title;
     modalMessage.textContent = message;
     
-    if (isConfirm) {
+    if (!showInput) {
         modalInput.classList.add('hidden');
         modalInput.value = '';
     } else {
@@ -46,7 +50,7 @@ function showModal(title, message, isConfirm, defaultValue, callback) {
     }
     
     modalElement.classList.remove('hidden');
-    if (!isConfirm) setTimeout(() => modalInput.focus(), 50);
+    if (showInput) setTimeout(() => modalInput.focus(), 50);
     
     activeModalCallback = callback;
 }
@@ -128,14 +132,38 @@ const fileSystem = {
     '/.git': { type: 'dir', children: ['config', 'HEAD', 'objects', 'refs'] }
 };
 
+const fileContents = {
+    '/README.md': '# Gitice - Git Visual Simulator\n\nA visual Git simulation tool for learning Git concepts.\n\n## Getting Started\n\nRun `git init` to initialize a repository.\n',
+    '/package.json': '{\n  "name": "gitice-project",\n  "version": "1.0.0",\n  "private": true\n}\n',
+    '/src/App.js': "import React from 'react';\n\nfunction App() {\n  return (\n    <div className=\"app\">\n      <h1>Welcome to Gitice</h1>\n    </div>\n  );\n}\n\nexport default App;\n",
+    '/src/styles.css': 'body {\n  margin: 0;\n  padding: 0;\n  font-family: sans-serif;\n}\n\n.app {\n  text-align: center;\n}\n',
+    '/.gitignore': 'node_modules/\ndist/\n.env\n*.log\n',
+    '/src/utils.js': 'export function formatDate(date) {\n  return date.toISOString().split("T")[0];\n}\n\nexport function capitalize(str) {\n  return str.charAt(0).toUpperCase() + str.slice(1);\n}\n',
+    '/src/components/Header.jsx': 'import React from "react";\n\nexport default function Header() {\n  return (\n    <header>\n      <nav>\n        <a href="/">Home</a>\n        <a href="/about">About</a>\n      </nav>\n    </header>\n  );\n}\n',
+    '/src/components/Footer.jsx': 'import React from "react";\n\nexport default function Footer() {\n  return (\n    <footer>\n      <p>&copy; 2024 Gitice Project</p>\n    </footer>\n  );\n}\n',
+    '/src/components/Sidebar.jsx': 'import React from "react";\n\nexport default function Sidebar() {\n  return (\n    <aside>\n      <ul>\n        <li>Dashboard</li>\n        <li>Settings</li>\n      </ul>\n    </aside>\n  );\n}\n',
+    '/public/index.html': '<!DOCTYPE html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8">\n  <title>Gitice App</title>\n</head>\n<body>\n  <div id="root"></div>\n</body>\n</html>\n',
+    '/public/favicon.ico': ''
+};
+
+let isVimMode = false;
+
+const projectFiles = [
+    'src/App.js', 'src/styles.css', 'src/utils.js',
+    'src/components/Header.jsx', 'src/components/Footer.jsx', 'src/components/Sidebar.jsx',
+    'public/index.html', 'README.md', 'package.json', '.gitignore'
+];
+
+let modifyIndex = 0;
+
 // --- Utilities ---
 function getBranchColor(name) {
     if (!name) return branchColors.default;
     if (branchColors[name]) return branchColors[name];
-    if (name.includes('develop') || name === 'dev') return branchColors.develop;
-    if (name.includes('feat')) return branchColors.feature;
-    if (name.includes('fix') || name.includes('bug')) return branchColors.hotfix;
-    if (name.includes('release')) return branchColors.release;
+    if (/^dev(elop)?$/.test(name)) return branchColors.develop;
+    if (/^feat(ure)?[/-]/.test(name) || name === 'feat' || name.startsWith('feat/') || name.startsWith('feature/')) return branchColors.feature;
+    if (/^(fix|bug)[/-]/.test(name) || name === 'fix' || name.startsWith('fix/') || name.startsWith('bug/') || name.startsWith('bugfix/') || name.startsWith('hotfix/')) return branchColors.hotfix;
+    if (/^release[/-]/.test(name) || name === 'release') return branchColors.release;
     let hash = 0;
     for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
     const colors = Object.values(branchColors);
@@ -162,8 +190,9 @@ function getFullPath(path) {
 
 function generateCommitId() {
     state.commitCounter++;
-    const hash = Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0') + state.commitCounter.toString(16);
-    return hash.substring(0, 7);
+    const rand = Math.floor(Math.random() * 16777215).toString(16).padStart(6, '0');
+    const count = (state.commitCounter % 4096).toString(16).padStart(3, '0');
+    return (rand + count).substring(0, 7);
 }
 
 function printTerminal(text, type = '') {
@@ -191,6 +220,441 @@ function resolveHead() {
     const branch = getHeadBranch();
     if (branch) return state.branches[branch];
     return state.HEAD;
+}
+
+// --- Vim Editor ---
+let vimState = null;
+let vimLastKey = null;
+let vimLastKeyTime = 0;
+
+function vimOpen(filename) {
+    const fullPath = getFullPath(filename);
+
+    if (fileSystem[fullPath] && fileSystem[fullPath].type === 'dir') {
+        printTerminal(`vim: ${filename}: Is a directory`, 'error');
+        return;
+    }
+
+    const content = fileContents[fullPath] !== undefined ? fileContents[fullPath] : '';
+    vimState = {
+        filename,
+        fullPath,
+        mode: 'normal',
+        lines: content ? content.split('\n') : [''],
+        cursorRow: 0,
+        cursorCol: 0,
+        commandBuffer: '',
+        yankedLine: null,
+        undoStack: [],
+        modified: false,
+        savedContent: content
+    };
+
+    isVimMode = true;
+    terminalOutput.innerHTML = '';
+    terminalInput.value = '';
+    terminalInput.classList.add('vim-active');
+    terminalInput.focus();
+    vimRender();
+}
+
+function vimSave() {
+    if (!vimState) return;
+    const content = vimState.lines.join('\n');
+    fileContents[vimState.fullPath] = content;
+
+    if (!fileSystem[vimState.fullPath]) {
+        fileSystem[vimState.fullPath] = { type: 'file' };
+        const parentPath = vimState.fullPath.substring(0, vimState.fullPath.lastIndexOf('/')) || '/';
+        if (fileSystem[parentPath] && fileSystem[parentPath].type === 'dir') {
+            const name = vimState.fullPath.substring(vimState.fullPath.lastIndexOf('/') + 1);
+            if (!fileSystem[parentPath].children.includes(name)) {
+                fileSystem[parentPath].children.push(name);
+            }
+        }
+    }
+
+    const relPath = vimState.fullPath.startsWith('/') ? vimState.fullPath.substring(1) : vimState.fullPath;
+    if (!state.stagedFiles.includes(relPath) && !state.modifiedFiles.includes(relPath)) {
+        state.modifiedFiles.push(relPath);
+    }
+
+    vimState.modified = false;
+    vimState.savedContent = content;
+    vimRender();
+}
+
+function vimQuit(force) {
+    if (!vimState) return;
+    if (vimState.modified && !force) {
+        printTerminal('No write since last change (add ! to override)', 'warn');
+        return;
+    }
+    isVimMode = false;
+    terminalInput.classList.remove('vim-active');
+    terminalOutput.innerHTML = '';
+    vimState = null;
+    terminalInput.focus();
+}
+
+function vimExecCommand(cmd) {
+    if (cmd === 'w') {
+        vimSave();
+        printTerminal(`"${vimState.filename}" ${vimState.lines.length}L written`, 'success');
+        vimState.mode = 'normal';
+        vimRender();
+    } else if (cmd === 'q') {
+        vimQuit(false);
+    } else if (cmd === 'wq') {
+        vimSave();
+        printTerminal(`"${vimState.filename}" ${vimState.lines.length}L written`, 'success');
+        vimQuit(false);
+    } else if (cmd === 'q!') {
+        vimQuit(true);
+    } else {
+        printTerminal(`E492: Not an editor command: ${cmd}`, 'error');
+        vimState.mode = 'normal';
+        vimRender();
+    }
+}
+
+function vimSaveUndo() {
+    if (!vimState) return;
+    vimState.undoStack.push({
+        lines: [...vimState.lines],
+        cursorRow: vimState.cursorRow,
+        cursorCol: vimState.cursorCol
+    });
+    if (vimState.undoStack.length > 50) vimState.undoStack.shift();
+}
+
+function vimHandleKey(e) {
+    if (!isVimMode || !vimState) return;
+    const s = vimState;
+    const key = e.key;
+
+    if (s.mode === 'command') {
+        e.preventDefault();
+        if (key === 'Enter') {
+            vimExecCommand(s.commandBuffer);
+            s.commandBuffer = '';
+        } else if (key === 'Escape') {
+            s.mode = 'normal';
+            s.commandBuffer = '';
+            vimRender();
+        } else if (key === 'Backspace') {
+            s.commandBuffer = s.commandBuffer.slice(0, -1);
+            vimRender();
+        } else if (key.length === 1) {
+            s.commandBuffer += key;
+            vimRender();
+        }
+        return;
+    }
+
+    if (s.mode === 'insert') {
+        e.preventDefault();
+        if (key === 'Escape') {
+            s.mode = 'normal';
+            s.cursorCol = Math.min(s.cursorCol, s.lines[s.cursorRow].length);
+            vimRender();
+        } else if (key === 'Enter') {
+            vimSaveUndo();
+            const line = s.lines[s.cursorRow];
+            s.lines[s.cursorRow] = line.substring(0, s.cursorCol);
+            s.lines.splice(s.cursorRow + 1, 0, line.substring(s.cursorCol));
+            s.cursorRow++;
+            s.cursorCol = 0;
+            s.modified = true;
+            vimRender();
+        } else if (key === 'Backspace') {
+            vimSaveUndo();
+            if (s.cursorCol > 0) {
+                s.lines[s.cursorRow] = s.lines[s.cursorRow].substring(0, s.cursorCol - 1) + s.lines[s.cursorRow].substring(s.cursorCol);
+                s.cursorCol--;
+            } else if (s.cursorRow > 0) {
+                const prevLen = s.lines[s.cursorRow - 1].length;
+                s.lines[s.cursorRow - 1] += s.lines[s.cursorRow];
+                s.lines.splice(s.cursorRow, 1);
+                s.cursorRow--;
+                s.cursorCol = prevLen;
+            }
+            s.modified = true;
+            vimRender();
+        } else if (key === 'Tab') {
+            vimSaveUndo();
+            s.lines[s.cursorRow] = s.lines[s.cursorRow].substring(0, s.cursorCol) + '  ' + s.lines[s.cursorRow].substring(s.cursorCol);
+            s.cursorCol += 2;
+            s.modified = true;
+            vimRender();
+        } else if (key.length === 1) {
+            vimSaveUndo();
+            s.lines[s.cursorRow] = s.lines[s.cursorRow].substring(0, s.cursorCol) + key + s.lines[s.cursorRow].substring(s.cursorCol);
+            s.cursorCol++;
+            s.modified = true;
+            vimRender();
+        }
+        return;
+    }
+
+    if (s.mode === 'normal') {
+        const now = Date.now();
+        if (key !== 'g' && key !== 'd' && key !== 'y') vimLastKey = null;
+
+        if (key === 'Escape') {
+            e.preventDefault();
+            s.cursorCol = Math.min(s.cursorCol, s.lines[s.cursorRow].length);
+            vimRender();
+        } else if (key === 'i') {
+            e.preventDefault();
+            s.mode = 'insert';
+            vimRender();
+        } else if (key === 'a') {
+            e.preventDefault();
+            s.cursorCol = Math.min(s.cursorCol + 1, s.lines[s.cursorRow].length);
+            s.mode = 'insert';
+            vimRender();
+        } else if (key === 'A') {
+            e.preventDefault();
+            s.cursorCol = s.lines[s.cursorRow].length;
+            s.mode = 'insert';
+            vimRender();
+        } else if (key === 'I') {
+            e.preventDefault();
+            s.cursorCol = 0;
+            s.mode = 'insert';
+            vimRender();
+        } else if (key === 'o') {
+            e.preventDefault();
+            vimSaveUndo();
+            s.lines.splice(s.cursorRow + 1, 0, '');
+            s.cursorRow++;
+            s.cursorCol = 0;
+            s.mode = 'insert';
+            s.modified = true;
+            vimRender();
+        } else if (key === 'O') {
+            e.preventDefault();
+            vimSaveUndo();
+            s.lines.splice(s.cursorRow, 0, '');
+            s.cursorCol = 0;
+            s.mode = 'insert';
+            s.modified = true;
+            vimRender();
+        } else if (key === 'x') {
+            e.preventDefault();
+            if (s.cursorCol < s.lines[s.cursorRow].length) {
+                vimSaveUndo();
+                s.lines[s.cursorRow] = s.lines[s.cursorRow].substring(0, s.cursorCol) + s.lines[s.cursorRow].substring(s.cursorCol + 1);
+                s.modified = true;
+                vimRender();
+            }
+        } else if (key === 'h' || key === 'ArrowLeft') {
+            e.preventDefault();
+            s.cursorCol = Math.max(0, s.cursorCol - 1);
+            vimRender();
+        } else if (key === 'j' || key === 'ArrowDown') {
+            e.preventDefault();
+            s.cursorRow = Math.min(s.lines.length - 1, s.cursorRow + 1);
+            s.cursorCol = Math.min(s.cursorCol, s.lines[s.cursorRow].length);
+            vimRender();
+        } else if (key === 'k' || key === 'ArrowUp') {
+            e.preventDefault();
+            s.cursorRow = Math.max(0, s.cursorRow - 1);
+            s.cursorCol = Math.min(s.cursorCol, s.lines[s.cursorRow].length);
+            vimRender();
+        } else if (key === 'l' || key === 'ArrowRight') {
+            e.preventDefault();
+            s.cursorCol = Math.min(s.lines[s.cursorRow].length, s.cursorCol + 1);
+            vimRender();
+        } else if (key === '0' || key === 'Home') {
+            e.preventDefault();
+            s.cursorCol = 0;
+            vimRender();
+        } else if (key === '$' || key === 'End') {
+            e.preventDefault();
+            s.cursorCol = s.lines[s.cursorRow].length;
+            vimRender();
+        } else if (key === 'g' || key === 'd' || key === 'y') {
+            if (vimLastKey === key && now - vimLastKeyTime < 600) {
+                e.preventDefault();
+                vimLastKey = null;
+                if (key === 'd') {
+                    vimSaveUndo();
+                    s.lines.splice(s.cursorRow, 1);
+                    if (s.lines.length === 0) s.lines = [''];
+                    s.cursorRow = Math.min(s.cursorRow, s.lines.length - 1);
+                    s.cursorCol = Math.min(s.cursorCol, s.lines[s.cursorRow].length);
+                    s.modified = true;
+                } else if (key === 'g') {
+                    s.cursorRow = 0;
+                    s.cursorCol = 0;
+                } else if (key === 'y') {
+                    s.yankedLine = s.lines[s.cursorRow];
+                }
+                vimRender();
+            } else {
+                e.preventDefault();
+                vimLastKey = key;
+                vimLastKeyTime = now;
+            }
+        } else if (key === 'G') {
+            e.preventDefault();
+            vimLastKey = null;
+            s.cursorRow = s.lines.length - 1;
+            s.cursorCol = 0;
+            vimRender();
+        } else if (key === 'p') {
+            e.preventDefault();
+            if (s.yankedLine !== null) {
+                vimSaveUndo();
+                s.lines.splice(s.cursorRow + 1, 0, s.yankedLine);
+                s.cursorRow++;
+                s.cursorCol = 0;
+                s.modified = true;
+                vimRender();
+            }
+        } else if (key === 'P') {
+            e.preventDefault();
+            if (s.yankedLine !== null) {
+                vimSaveUndo();
+                s.lines.splice(s.cursorRow, 0, s.yankedLine);
+                s.cursorCol = 0;
+                s.modified = true;
+                vimRender();
+            }
+        } else if (key === 'u') {
+            e.preventDefault();
+            vimLastKey = null;
+            if (s.undoStack.length) {
+                const prev = s.undoStack.pop();
+                s.lines = prev.lines;
+                s.cursorRow = prev.cursorRow;
+                s.cursorCol = prev.cursorCol;
+                vimRender();
+            }
+        } else if (key === ':') {
+            e.preventDefault();
+            vimLastKey = null;
+            s.mode = 'command';
+            s.commandBuffer = '';
+            vimRender();
+        } else if (key === 'w') {
+            e.preventDefault();
+            const line = s.lines[s.cursorRow];
+            let pos = s.cursorCol + 1;
+            while (pos < line.length && line[pos] === ' ') pos++;
+            while (pos < line.length && line[pos] !== ' ') pos++;
+            s.cursorCol = Math.min(pos, line.length);
+            vimRender();
+        } else if (key === 'b') {
+            e.preventDefault();
+            const line = s.lines[s.cursorRow];
+            let pos = s.cursorCol - 1;
+            while (pos > 0 && line[pos] === ' ') pos--;
+            while (pos > 0 && line[pos - 1] !== ' ') pos--;
+            s.cursorCol = pos;
+            vimRender();
+        }
+    }
+}
+
+function vimRender() {
+    if (!vimState) return;
+    terminalOutput.innerHTML = '';
+    const s = vimState;
+    const lineCount = s.lines.length;
+    const totalLines = Math.max(lineCount + 3, 25);
+
+    for (let i = 0; i < totalLines; i++) {
+        const lineDiv = document.createElement('div');
+        lineDiv.className = 'vim-line';
+
+        if (i < lineCount) {
+            const line = s.lines[i];
+            if (i === s.cursorRow && s.mode !== 'command') {
+                const before = line.substring(0, s.cursorCol);
+                const at = line[s.cursorCol] || ' ';
+                const after = line.substring(s.cursorCol + 1);
+
+                const beforeSpan = document.createElement('span');
+                beforeSpan.textContent = before;
+                beforeSpan.style.whiteSpace = 'pre';
+                lineDiv.appendChild(beforeSpan);
+
+                const cursorSpan = document.createElement('span');
+                cursorSpan.className = 'vim-cursor-char';
+                cursorSpan.textContent = at;
+                lineDiv.appendChild(cursorSpan);
+
+                if (after) {
+                    const afterSpan = document.createElement('span');
+                    afterSpan.textContent = after;
+                    afterSpan.style.whiteSpace = 'pre';
+                    lineDiv.appendChild(afterSpan);
+                }
+            } else {
+                lineDiv.textContent = line;
+                lineDiv.style.whiteSpace = 'pre';
+            }
+        } else {
+            lineDiv.textContent = '~';
+            lineDiv.className = 'vim-line vim-empty-line';
+        }
+
+        terminalOutput.appendChild(lineDiv);
+    }
+
+    const modeName = s.mode === 'normal' ? 'NORMAL' : s.mode === 'insert' ? 'INSERT' : 'COMMAND';
+    const cmdDisplay = s.mode === 'command' ? `:${s.commandBuffer}` : '';
+    const modIndicator = s.modified ? ' [+ ]' : '';
+
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'vim-status';
+    statusDiv.textContent = `-- ${modeName}${cmdDisplay} -- ${s.fullPath}${modIndicator} | ${s.cursorRow + 1}:${s.cursorCol + 1}`;
+    terminalOutput.appendChild(statusDiv);
+
+    terminalBody.scrollTop = terminalBody.scrollHeight;
+}
+
+// --- File Modification Utilities ---
+function doModifyFile() {
+    if (!state.initialized) {
+        showToast('Run git init first');
+        return;
+    }
+    const file = projectFiles[modifyIndex % projectFiles.length];
+    modifyIndex++;
+    const fullPath = '/' + file;
+    if (!state.modifiedFiles.includes(file) && !state.stagedFiles.includes(file)) {
+        state.modifiedFiles.push(file);
+        if (fileContents[fullPath]) {
+            const lines = fileContents[fullPath].split('\n');
+            if (lines.length > 1) {
+                lines.splice(1, 0, `// modified at ${new Date().toLocaleTimeString()}`);
+            } else {
+                lines[0] = lines[0] + '\n// modified';
+            }
+            fileContents[fullPath] = lines.join('\n');
+        }
+        printTerminal(`modified:   ${file}`, 'error');
+    } else {
+        showToast(`${file} already changed`);
+    }
+}
+
+function doStageAll() {
+    if (!state.initialized) {
+        showToast('Run git init first');
+        return;
+    }
+    if (!state.modifiedFiles.length) {
+        showToast('No files to stage');
+        return;
+    }
+    state.stagedFiles = [...new Set([...state.stagedFiles, ...state.modifiedFiles])];
+    state.modifiedFiles = [];
+    printTerminal('All changes staged for commit', 'success');
 }
 
 // --- Git Engine ---
@@ -265,10 +729,12 @@ const gitCommands = {
     },
     'git rm': (args) => {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
+        if (!args.length) return printTerminal('fatal: No file specified', 'error');
         args.forEach(file => {
             if (file.startsWith('-')) return;
             const idxS = state.stagedFiles.indexOf(file);
             const idxM = state.modifiedFiles.indexOf(file);
+            if (idxS === -1 && idxM === -1) return printTerminal(`fatal: pathspec '${file}' did not match any files`, 'error');
             if (idxS !== -1) state.stagedFiles.splice(idxS, 1);
             if (idxM !== -1) state.modifiedFiles.splice(idxM, 1);
             printTerminal(`rm '${file}'`);
@@ -287,7 +753,7 @@ const gitCommands = {
         const msgIdx = args.indexOf('-m');
         const currentId = resolveHead();
         const branch = getHeadBranch();
-        let message = (msgIdx !== -1 && args[msgIdx + 1]) ? args[msgIdx + 1] : 'Update';
+        let message = (msgIdx !== -1 && args[msgIdx + 1]) ? args[msgIdx + 1] : '';
 
         if (amend && currentId) {
             const oldCommit = state.commits[currentId];
@@ -296,6 +762,11 @@ const gitCommands = {
             state.stagedFiles = [];
             printTerminal(`[${branch || 'detached HEAD'} ${currentId}] ${message} (amended)`, 'success');
             renderGraph();
+            return;
+        }
+
+        if (!message) {
+            printTerminal('Empty commit message. Use -m "message" to provide one.', 'warn');
             return;
         }
 
@@ -323,9 +794,26 @@ const gitCommands = {
             if (state.branches[target] === undefined) return printTerminal(`error: branch '${target}' not found.`, 'error');
             if (getHeadBranch() === target) return printTerminal(`error: Cannot delete branch '${target}' checked out`, 'error');
             const hash = state.branches[target];
+            
+            if (args[0] === '-d' && hash) {
+                const headCommit = resolveHead();
+                const isMerged = (() => {
+                    if (!headCommit) return false;
+                    const visited = new Set(), q = [headCommit];
+                    while (q.length) {
+                        const id = q.shift();
+                        if (id === hash) return true;
+                        if (visited.has(id)) continue;
+                        visited.add(id);
+                        if (state.commits[id]) q.push(...state.commits[id].parents);
+                    }
+                    return false;
+                })();
+                if (!isMerged) return printTerminal(`error: The branch '${target}' is not fully merged. If you are sure you want to delete it, run 'git branch -D ${target}'.`, 'error');
+            }
+            
             delete state.branches[target];
             
-            // Forcefully wipe out all commits associated with this branch to clear the visual track if not merged
             if (args[0] === '-D') {
                  Object.keys(state.commits).forEach(id => {
                      if (state.commits[id].branch === target) delete state.commits[id];
@@ -356,10 +844,12 @@ const gitCommands = {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
         if (!args.length) return printTerminal('fatal: missing branch or path', 'error');
         let target = args[0];
+        let isNewBranch = false;
         if (target === '-b' || target === '-B') { 
             const bName = args[1];
             if (target === '-B' || !state.branches[bName]) {
                 state.branches[bName] = resolveHead();
+                isNewBranch = true;
             } else {
                 return printTerminal(`fatal: A branch named '${bName}' already exists.`, 'error');
             }
@@ -373,13 +863,20 @@ const gitCommands = {
             });
             return;
         }
-        if (state.branches[target] !== undefined) { state.HEAD = `refs/heads/${target}`; printTerminal(`Switched to branch '${target}'`); }
+        if (state.branches[target] !== undefined) { state.HEAD = `refs/heads/${target}`; printTerminal(isNewBranch ? `Switched to a new branch '${target}'` : `Switched to branch '${target}'`); }
         else {
             const hash = Object.keys(state.commits).find(k => k.startsWith(target));
             if (hash) { state.HEAD = hash; printTerminal(`Note: switching to '${hash}'. Detached HEAD.`, 'warn'); }
             else if (state.modifiedFiles.includes(target) || state.stagedFiles.includes(target)) {
-                 if (state.modifiedFiles.includes(target)) state.modifiedFiles.splice(state.modifiedFiles.indexOf(target), 1);
-                 return; // File checkout
+                 if (state.modifiedFiles.includes(target)) {
+                     state.modifiedFiles.splice(state.modifiedFiles.indexOf(target), 1);
+                     printTerminal(`Restored ${target}`);
+                 }
+                 if (state.stagedFiles.includes(target)) {
+                     state.stagedFiles.splice(state.stagedFiles.indexOf(target), 1);
+                     printTerminal(`Restored ${target}`);
+                 }
+                 return;
             }
             else printTerminal(`error: pathspec '${target}' did not match any file(s) known to git`, 'error');
         }
@@ -574,6 +1071,70 @@ const gitCommands = {
         if (!state.initialized) return printTerminal('fatal: not a git repository', 'error');
         const oneline = args.includes('--oneline');
         const graph = args.includes('--graph');
+
+        if (graph) {
+            const visited = new Set();
+            const commits = [];
+            const q = resolveHead() ? [resolveHead()] : [];
+            while (q.length) {
+                const id = q.shift();
+                if (visited.has(id) || !state.commits[id]) continue;
+                visited.add(id);
+                commits.push(id);
+                state.commits[id].parents.forEach(p => q.push(p));
+            }
+
+            const columns = [];
+
+            commits.forEach((id, idx) => {
+                const c = state.commits[id];
+                let col = columns.indexOf(id);
+                if (col === -1) {
+                    const usedCols = new Set();
+                    for (let i = 0; i < idx; i++) {
+                        const pid = commits[i];
+                        if (state.commits[pid] && state.commits[pid].parents.includes(id)) {
+                            usedCols.add(i);
+                        }
+                    }
+                    col = 0;
+                    while (usedCols.has(col)) col++;
+                    columns[col] = id;
+                }
+
+                const pipes = [];
+                for (let i = 0; i <= Math.max(col, columns.length - 1); i++) {
+                    if (columns[i] && (columns[i] === id || state.commits[columns[i]]?.parents.includes(id))) {
+                        pipes.push(i === col ? '*' : '|');
+                    } else {
+                        pipes.push(' ');
+                    }
+                }
+
+                while (pipes.length && pipes[pipes.length - 1] === ' ') pipes.pop();
+                const graphStr = pipes.map((p, i) => {
+                    if (p === '*' || p === '|') return p === '*' ? '* ' : '| ';
+                    return '  ';
+                }).join('').trimEnd() || '';
+
+                let refNames = [];
+                if (state.HEAD === id) refNames.push('HEAD');
+                else if (state.HEAD === `refs/heads/${c.branch}` && state.branches[c.branch] === id) refNames.push(`HEAD -> ${c.branch}`);
+                Object.keys(state.branches).forEach(b => {
+                    if (state.branches[b] === id && state.HEAD !== `refs/heads/${b}`) refNames.push(b);
+                });
+                const refStr = refNames.length ? ` (${refNames.join(', ')})` : '';
+
+                if (oneline) {
+                    printTerminal(`${graphStr}${c.id.substring(0, 7)}${refStr} ${c.message}`, 'warn');
+                } else {
+                    printTerminal(`${graphStr}commit ${c.id}${refStr}`, 'warn');
+                    printTerminal(`  Author: Mojahid <mojahid@gitice.com>\n  Date: ${new Date(c.timestamp).toUTCString()}\n\n      ${c.message}\n`);
+                }
+            });
+            return;
+        }
+
         let curr = resolveHead();
         const visited = new Set();
         const queue = curr ? [curr] : [];
@@ -592,7 +1153,7 @@ const gitCommands = {
             const refStr = refNames.length ? ` (${refNames.join(', ')})` : '';
 
             if (oneline) {
-                printTerminal(`${graph ? '* ' : ''}${c.id.substring(0, 7)}${refStr} ${c.message}`, 'warn');
+                printTerminal(`${c.id.substring(0, 7)}${refStr} ${c.message}`, 'warn');
             } else {
                 printTerminal(`commit ${c.id}${refStr}`, 'warn');
                 printTerminal(`Author: Mojahid <mojahid@gitice.com>\nDate: ${new Date(c.timestamp).toUTCString()}\n\n    ${c.message}\n`);
@@ -618,12 +1179,31 @@ const gitCommands = {
     touch: (args) => {
         if (!args.length) return printTerminal('touch: missing file operand', 'error');
         args.forEach(f => {
-            if (!f.startsWith('-') && !state.modifiedFiles.includes(f) && !state.stagedFiles.includes(f)) {
+            if (f.startsWith('-')) return;
+            if (!state.modifiedFiles.includes(f) && !state.stagedFiles.includes(f)) {
                  state.modifiedFiles.push(f);
             }
         });
     },
-    clear: () => { terminalOutput.innerHTML = ''; }
+    clear: () => { terminalOutput.innerHTML = ''; },
+    vim: (args) => {
+        const target = args[0];
+        if (!target) {
+            vimOpen('[No Name]');
+        } else {
+            vimOpen(target);
+        }
+    },
+    vi: (args) => {
+        const target = args[0];
+        if (!target) {
+            vimOpen('[No Name]');
+        } else {
+            vimOpen(target);
+        }
+    },
+    modify: () => { doModifyFile(); },
+    stage: () => { doStageAll(); }
 };
 
 // --- Graph Rendering ---
@@ -651,7 +1231,32 @@ function renderGraph() {
 
     if (!Object.keys(state.commits).length) return;
 
-    const commitList = Object.values(state.commits).sort((a, b) => a.timestamp - b.timestamp);
+    const topoSort = () => {
+        const inDegree = {}, children = {};
+        Object.keys(state.commits).forEach(id => { inDegree[id] = 0; children[id] = []; });
+        Object.values(state.commits).forEach(c => {
+            c.parents.forEach(p => {
+                if (state.commits[p]) {
+                    children[p] = children[p] || [];
+                    children[p].push(c.id);
+                    inDegree[c.id] = (inDegree[c.id] || 0) + 1;
+                }
+            });
+        });
+        const q = Object.keys(inDegree).filter(id => inDegree[id] === 0);
+        const order = [];
+        while (q.length) {
+            const id = q.shift();
+            order.push(id);
+            (children[id] || []).forEach(child => {
+                inDegree[child]--;
+                if (inDegree[child] === 0) q.push(child);
+            });
+        }
+        return order.map(id => state.commits[id]).filter(Boolean);
+    };
+
+    const commitList = topoSort();
     const tracks = ['main', 'master', 'develop'];
     const layout = {};
     let y = 80;
@@ -720,7 +1325,12 @@ function renderGraph() {
         nodesContainer.appendChild(node);
     });
 
-    const maxY = Math.max(...Object.values(layout).map(l => l.y));
+    const maxX = Math.max(...Object.values(layout).map(l => l.x), 0);
+    const maxY = Math.max(...Object.values(layout).map(l => l.y), 0);
+    if (canvasContainer) {
+        canvasContainer.style.width = `${(tracks.length * X_SPACING) + 800}px`;
+        canvasContainer.style.height = `${maxY + 400}px`;
+    }
     const targetY = -(maxY - (visualPanel?.clientHeight || 600) + 150);
     if (targetY < 0) {
         currentTranslateY = targetY; initialTranslateY = targetY;
@@ -841,12 +1451,6 @@ window.onload = () => {
     projectSelect.onchange = (e) => {
         const v = e.target.value;
         
-        if (v === 'custom') {
-            customControls.classList.remove('hidden');
-        } else {
-            customControls.classList.add('hidden');
-        }
-
         if (v === 'simple') mockSimple();
         else if (v === 'intermediate') mockIntermediate();
         else if (v === 'complex') mockComplex();
@@ -854,32 +1458,53 @@ window.onload = () => {
         else if (v === 'custom') mockCustom();
     };
 
+    function uiCmd(cmd) {
+        const path = currentPath === '/' ? '~' : `~${currentPath}`;
+        printTerminal(`mojahid@gitice:${path}$ ${cmd}`);
+    }
+
+    btnModify.onclick = () => { uiCmd('modify'); doModifyFile(); };
+    btnStage.onclick = () => { uiCmd('git add .'); doStageAll(); };
+
     btnCommit.onclick = () => {
-        showModal('Commit', 'Enter commit message:', false, 'Custom commit', (msg) => {
-            if (msg) gitCommands['git commit'](['--allow-empty', '-m', msg]);
+        showModal('Commit', 'Enter commit message:', true, 'Custom commit', (msg) => {
+            if (msg) {
+                uiCmd(`git commit --allow-empty -m "${msg}"`);
+                gitCommands['git commit'](['--allow-empty', '-m', msg]);
+            }
         });
     };
 
     btnBranch.onclick = () => {
-        showModal('Create Branch', 'Enter new branch name:', false, '', (branchName) => {
+        showModal('Create Branch', 'Enter new branch name:', true, '', (branchName) => {
             if (branchName) {
+                uiCmd(`git branch ${branchName}`);
                 gitCommands['git branch']([branchName]);
-                showModal('Switch Branch', `Switch to branch '${branchName}'?`, true, '', (confirm) => {
-                    if (confirm) gitCommands['git checkout']([branchName]);
+                showModal('Switch Branch', `Switch to branch '${branchName}'?`, false, '', (confirm) => {
+                    if (confirm) {
+                        uiCmd(`git checkout ${branchName}`);
+                        gitCommands['git checkout']([branchName]);
+                    }
                 });
             }
         });
     };
 
     btnCheckout.onclick = () => {
-        showModal('Checkout', 'Enter branch name to checkout:', false, '', (branchName) => {
-            if (branchName) gitCommands['git checkout']([branchName]);
+        showModal('Checkout', 'Enter branch name to checkout:', true, '', (branchName) => {
+            if (branchName) {
+                uiCmd(`git checkout ${branchName}`);
+                gitCommands['git checkout']([branchName]);
+            }
         });
     };
 
     btnMerge.onclick = () => {
-        showModal('Merge', 'Enter branch name to merge into current:', false, '', (branchName) => {
-            if (branchName) gitCommands['git merge']([branchName]);
+        showModal('Merge', 'Enter branch name to merge into current:', true, '', (branchName) => {
+            if (branchName) {
+                uiCmd(`git merge ${branchName}`);
+                gitCommands['git merge']([branchName]);
+            }
         });
     };
 
@@ -887,22 +1512,62 @@ window.onload = () => {
         if (contextMenu) contextMenu.classList.add('hidden');
     });
 
+    menuModify.onclick = () => {
+        if (!contextMenuTarget) return;
+        uiCmd('modify');
+        doModifyFile();
+        contextMenu.classList.add('hidden');
+    };
+
+    menuStage.onclick = () => {
+        uiCmd('git add .');
+        doStageAll();
+        contextMenu.classList.add('hidden');
+    };
+
     menuCommit.onclick = () => {
         if (!contextMenuTarget) return;
+        const prevBranch = getHeadBranch();
+        const shortHash = contextMenuTarget.substring(0, 7);
+        uiCmd(`git checkout ${shortHash}`);
         gitCommands['git checkout']([contextMenuTarget]);
-        showModal('Commit', 'Enter commit message:', false, 'Custom commit', (msg) => {
-            if (msg) gitCommands['git commit'](['--allow-empty', '-m', msg]);
+        showModal('Commit', 'Enter commit message:', true, 'Custom commit', (msg) => {
+            if (msg) {
+                uiCmd(`git commit --allow-empty -m "${msg}"`);
+                const newId = generateCommitId();
+                state.commits[newId] = {
+                    id: newId, message: msg, timestamp: Date.now(),
+                    parents: [contextMenuTarget],
+                    branch: prevBranch || 'detached',
+                    color: getBranchColor(prevBranch)
+                };
+                if (prevBranch) {
+                    state.branches[prevBranch] = newId;
+                    state.HEAD = `refs/heads/${prevBranch}`;
+                } else {
+                    state.HEAD = newId;
+                }
+                state.stagedFiles = [];
+                printTerminal(`[${prevBranch || 'detached HEAD'} ${newId}] ${msg}`, 'success');
+                renderGraph();
+            }
         });
     };
 
     menuBranch.onclick = () => {
         if (!contextMenuTarget) return;
-        showModal('Create Branch', 'Enter new branch name:', false, '', (branchName) => {
+        const shortHash = contextMenuTarget.substring(0, 7);
+        showModal('Create Branch', 'Enter new branch name:', true, '', (branchName) => {
             if (branchName) {
+                uiCmd(`git checkout ${shortHash}`);
                 gitCommands['git checkout']([contextMenuTarget]);
+                uiCmd(`git branch ${branchName}`);
                 gitCommands['git branch']([branchName]);
-                showModal('Switch Branch', `Switch to branch '${branchName}'?`, true, '', (confirm) => {
-                    if (confirm) gitCommands['git checkout']([branchName]);
+                showModal('Switch Branch', `Switch to branch '${branchName}'?`, false, '', (confirm) => {
+                    if (confirm) {
+                        uiCmd(`git checkout ${branchName}`);
+                        gitCommands['git checkout']([branchName]);
+                    }
                 });
             }
         });
@@ -910,11 +1575,15 @@ window.onload = () => {
 
     menuCheckout.onclick = () => {
         if (!contextMenuTarget) return;
+        const shortHash = contextMenuTarget.substring(0, 7);
+        uiCmd(`git checkout ${shortHash}`);
         gitCommands['git checkout']([contextMenuTarget]);
     };
 
     menuCtxMerge.onclick = () => {
         if (!contextMenuTarget) return;
+        const shortHash = contextMenuTarget.substring(0, 7);
+        uiCmd(`git merge ${shortHash}`);
         gitCommands['git merge']([contextMenuTarget]);
     };
 
@@ -965,6 +1634,25 @@ window.onload = () => {
     let historyIndex = -1;
 
     terminalInput.onkeydown = (e) => {
+        if (isVimMode) {
+            if (e.key === 'Escape') {
+                vimHandleKey(e);
+                return;
+            }
+            if (e.key === 'Enter' || e.key === 'Backspace' || e.key === 'Tab' || e.key === 'Home' || e.key === 'End') {
+                vimHandleKey(e);
+                return;
+            }
+            if (e.key.startsWith('Arrow')) {
+                vimHandleKey(e);
+                return;
+            }
+            if (e.key.length === 1) {
+                vimHandleKey(e);
+                return;
+            }
+            return;
+        }
         if (e.key === 'Enter') {
             const val = terminalInput.value.trim(); 
             if (val) {
